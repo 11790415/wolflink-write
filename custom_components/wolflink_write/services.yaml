@@ -49,3 +49,15 @@ set_value:
           mode: box
           min: 0
           max: 999999999
+    bundle_id:
+      name: Bundle-ID (optional)
+      description: >-
+        BundleId des Portal-Tabs, in dem der Parameter liegt. Wird
+        normalerweise automatisch aus den geladenen Parametern ermittelt
+        (Fallback: 1000).
+      required: false
+      selector:
+        number:
+          mode: box
+          min: 0
+          max: 999999
