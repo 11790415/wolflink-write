@@ -1,0 +1,51 @@
+set_value:
+  name: Wert schreiben
+  description: >-
+    Schreibt einen Parameterwert über das Wolf SmartSet Portal
+    (api/portal/WriteParameterValues). Zugangsdaten sowie Gateway- und
+    System-ID werden automatisch aus der bestehenden Wolf SmartSet
+    (wolflink) Integration übernommen.
+  fields:
+    value_id:
+      name: ValueId
+      description: >-
+        Numerische ValueId des Parameters (z. B. 22004200000 für
+        "1x Warmwasserladung"). Ermittelbar aus der Unique-ID der
+        zugehörigen wolflink-Entität (Format "systemId:valueId").
+      required: true
+      example: 22004200000
+      selector:
+        number:
+          mode: box
+          min: 0
+          max: 99999999999
+    state:
+      name: Wert
+      description: Zu schreibender Wert (z. B. 1 für Ein, 0 für Aus).
+      required: true
+      example: 1
+      selector:
+        text:
+    gateway_id:
+      name: Gateway-ID (optional)
+      description: >-
+        Überschreibt die automatisch aus der wolflink-Integration
+        ermittelte Gateway-ID.
+      required: false
+      selector:
+        number:
+          mode: box
+          min: 0
+          max: 999999999
+    system_id:
+      name: System-ID (optional)
+      description: >-
+        System-ID des Zielsystems (z. B. 76873). Bei mehreren
+        Wolf-Systemen wählt sie den passenden Konfigurationseintrag aus.
+      required: false
+      example: 76873
+      selector:
+        number:
+          mode: box
+          min: 0
+          max: 999999999

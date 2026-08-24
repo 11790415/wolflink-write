@@ -1,0 +1,13 @@
+{
+  "domain": "wolflink_write",
+  "name": "Wolf SmartSet Write",
+  "version": "0.1.0",
+  "documentation": "https://github.com/home-assistant/core/pull/128988",
+  "issue_tracker": "https://github.com/home-assistant/core/pull/128988",
+  "codeowners": [],
+  "dependencies": [],
+  "after_dependencies": ["wolflink"],
+  "requirements": [],
+  "iot_class": "cloud_polling",
+  "integration_type": "service"
+}
