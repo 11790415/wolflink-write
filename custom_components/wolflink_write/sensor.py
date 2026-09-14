@@ -1,9 +1,8 @@
-Sensor · PY
 """Sensor-Plattform fuer wolflink_write.
- 
+
 Liest die Luft-Temperaturen der Aussengeraete aus dem Wolf SmartSet Portal, die
 die offizielle wolflink-Integration nicht anlegt.
- 
+
 Hintergrund: wolf-comm baut die Entitaetenliste in fetch_parameters() nur aus
 MENU_ITEMS[0].TAB_VIEWS, also dem Benutzermenue. Zuluft- und Ablufttemperatur
 liegen in der Fachmann-Ebene und fallen dort heraus. Zum reinen *Lesen* der
@@ -12,16 +11,16 @@ die passende BundleId mitgeschickt wird. Deshalb sind die IDs hier fest
 hinterlegt und es wird kein zweiter WolfClient mit expert_p=True erzeugt - das
 wuerde eine zweite Sitzung auf demselben Konto oeffnen und die Sitzung der
 offiziellen Integration entwerten koennen.
- 
+
 Der WolfClient der laufenden wolflink-Integration wird wiederverwendet.
 """
- 
+
 from __future__ import annotations
- 
+
 from datetime import timedelta
 import logging
 from typing import Any
- 
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -36,9 +35,9 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
- 
+
 from wolf_comm.models import Temperature
- 
+
 from . import (
     _CLIENT_ATTRS,
     _GATEWAY_ATTRS,
@@ -47,11 +46,11 @@ from . import (
     _first_attr,
     WOLFLINK_DOMAIN,
 )
- 
+
 _LOGGER = logging.getLogger(__name__)
- 
+
 SCAN_INTERVAL = timedelta(seconds=120)
- 
+
 # ValueId, BundleId, Anzeigename, eindeutige Kennung
 # Ermittelt ueber einen einmaligen Lauf mit expert_p=True.
 # Die letzten beiden Ziffern der ValueId sind die Geraetenummer der Kaskade,
@@ -62,11 +61,11 @@ AIR_SENSORS: list[tuple[int, int, str, str]] = [
     (27004000002, 4900, "WP2 Zulufttemperatur", "wp2_zuluft"),
     (27004300002, 4900, "WP2 Ablufttemperatur", "wp2_abluft"),
 ]
- 
- 
+
+
 def _build_parameters() -> list[Temperature]:
     """Temperature-Objekte bauen, die fetch_value() erwartet.
- 
+
     fetch_value() wertet nur value_id und bundle_id aus; parameter_id, parent
     und read_only sind fuer den Lesevorgang ohne Bedeutung.
     """
@@ -74,8 +73,8 @@ def _build_parameters() -> list[Temperature]:
         Temperature(value_id, name, None, 0, bundle_id, True)
         for value_id, bundle_id, name, _key in AIR_SENSORS
     ]
- 
- 
+
+
 def _resolve_client(hass: HomeAssistant) -> tuple[Any, Any, Any]:
     """Client, Gateway-ID und System-ID der laufenden wolflink-Integration holen."""
     for entry in hass.config_entries.async_entries(WOLFLINK_DOMAIN):
@@ -86,8 +85,8 @@ def _resolve_client(hass: HomeAssistant) -> tuple[Any, Any, Any]:
             if client is not None and gateway is not None and system is not None:
                 return client, gateway, system
     return None, None, None
- 
- 
+
+
 def _to_float(raw: Any) -> float | None:
     """Wolf liefert Werte als Text; Komma und Punkt beide zulassen."""
     if raw is None:
@@ -96,8 +95,8 @@ def _to_float(raw: Any) -> float | None:
         return float(str(raw).replace(",", "."))
     except (TypeError, ValueError):
         return None
- 
- 
+
+
 async def async_setup_platform(
     hass: HomeAssistant,
     config: ConfigType,
@@ -106,7 +105,7 @@ async def async_setup_platform(
 ) -> None:
     """Plattform einrichten."""
     parameters = _build_parameters()
- 
+
     async def _async_update() -> dict[str, float]:
         client, gateway, system = _resolve_client(hass)
         if client is None:
@@ -118,7 +117,7 @@ async def async_setup_platform(
             values = await client.fetch_value(gateway, system, parameters)
         except Exception as err:  # noqa: BLE001 - Bibliotheksfehler durchreichen
             raise UpdateFailed(f"Abruf fehlgeschlagen: {err}") from err
- 
+
         by_id = {str(v.value_id): _to_float(v.value) for v in values}
         result: dict[str, float] = {}
         for value_id, _bundle_id, _name, key in AIR_SENSORS:
@@ -128,7 +127,7 @@ async def async_setup_platform(
         if not result:
             raise UpdateFailed("Keine Werte erhalten")
         return result
- 
+
     coordinator: DataUpdateCoordinator[dict[str, float]] = DataUpdateCoordinator(
         hass,
         _LOGGER,
@@ -136,24 +135,24 @@ async def async_setup_platform(
         update_method=_async_update,
         update_interval=SCAN_INTERVAL,
     )
- 
+
     await coordinator.async_config_entry_first_refresh()
- 
+
     async_add_entities(
         WolfAirTemperature(coordinator, name, key)
         for _value_id, _bundle_id, name, key in AIR_SENSORS
     )
- 
- 
+
+
 class WolfAirTemperature(CoordinatorEntity, SensorEntity):
     """Eine Luft-Temperatur eines Wolf-Aussengeraets."""
- 
+
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_suggested_display_precision = 1
     _attr_has_entity_name = False
- 
+
     def __init__(
         self,
         coordinator: DataUpdateCoordinator[dict[str, float]],
@@ -164,13 +163,13 @@ class WolfAirTemperature(CoordinatorEntity, SensorEntity):
         self._key = key
         self._attr_name = name
         self._attr_unique_id = f"wolflink_write_{key}"
- 
+
     @property
     def native_value(self) -> float | None:
         if not self.coordinator.data:
             return None
         return self.coordinator.data.get(self._key)
- 
+
     @property
     def available(self) -> bool:
         return (
@@ -178,4 +177,3 @@ class WolfAirTemperature(CoordinatorEntity, SensorEntity):
             and self.coordinator.data is not None
             and self._key in self.coordinator.data
         )
- 
