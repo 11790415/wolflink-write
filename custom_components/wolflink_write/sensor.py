@@ -13,6 +13,13 @@ wuerde eine zweite Sitzung auf demselben Konto oeffnen und die Sitzung der
 offiziellen Integration entwerten koennen.
 
 Der WolfClient der laufenden wolflink-Integration wird wiederverwendet.
+
+Warum nicht client.fetch_value(): Diese Methode sendet Bundle=False. Die Werte
+der Fachmann-Ebene werden vom Gateway dann offenbar nicht frisch ueber den eBus
+geholt, sondern es kommt der zuletzt zwischengespeicherte Stand zurueck - in der
+Praxis eingefroren auf den Moment, in dem die Seite zuletzt im SmartSet-Portal
+geoeffnet war. Deshalb wird hier direkt mit Bundle=True angefragt, was das
+Gateway veranlasst, das komplette Bundle neu einzulesen.
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.util import dt as dt_util
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
@@ -50,6 +58,8 @@ from . import (
 _LOGGER = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=120)
+
+PARAMETER_VALUES_PATH = "api/portal/GetParameterValues"
 
 # ValueId, BundleId, Anzeigename, eindeutige Kennung
 # Ermittelt ueber einen einmaligen Lauf mit expert_p=True.
@@ -106,29 +116,79 @@ async def async_setup_platform(
     """Plattform einrichten."""
     parameters = _build_parameters()
 
-    async def _async_update() -> dict[str, float]:
+    # ValueIds nach BundleId gruppieren - pro Bundle eine Anfrage
+    bundles: dict[int, list[int]] = {}
+    for value_id, bundle_id, _name, _key in AIR_SENSORS:
+        bundles.setdefault(bundle_id, []).append(value_id)
+
+    async def _fetch_bundle(client, gateway, system, bundle_id, value_ids) -> dict:
+        """Ein Bundle mit Bundle=True abfragen.
+
+        Der private Request-Helfer der Bibliothek wird wiederverwendet, damit
+        Authentifizierung, Session-Erneuerung und Fehlerbehandlung identisch
+        zur offiziellen Integration bleiben.
+        """
+        request = getattr(client, "_WolfClient__request", None)
+        if request is None:
+            raise UpdateFailed(
+                "wolf-comm hat sich geaendert - interner Request-Helfer fehlt"
+            )
+        payload = {
+            "BundleId": bundle_id,
+            "Bundle": True,
+            "ValueIdList": value_ids,
+            "GatewayId": gateway,
+            "SystemId": system,
+            "GuiIdChanged": False,
+            "SessionId": client.session_id,
+            "LastAccess": None,
+        }
+        return await request(
+            "post",
+            PARAMETER_VALUES_PATH,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+        )
+
+    async def _async_update() -> dict[str, Any]:
         client, gateway, system = _resolve_client(hass)
         if client is None:
             raise UpdateFailed(
                 "Kein laufender wolflink-Koordinator gefunden - "
                 "ist die offizielle Wolf-Integration eingerichtet?"
             )
-        try:
-            values = await client.fetch_value(gateway, system, parameters)
-        except Exception as err:  # noqa: BLE001 - Bibliotheksfehler durchreichen
-            raise UpdateFailed(f"Abruf fehlgeschlagen: {err}") from err
+        if getattr(client, "session_id", None) is None:
+            raise UpdateFailed("Noch keine Wolf-Sitzung - naechster Versuch spaeter")
 
-        by_id = {str(v.value_id): _to_float(v.value) for v in values}
-        result: dict[str, float] = {}
+        by_id: dict[str, float | None] = {}
+        for bundle_id, value_ids in bundles.items():
+            try:
+                res = await _fetch_bundle(client, gateway, system, bundle_id, value_ids)
+            except UpdateFailed:
+                raise
+            except Exception as err:  # noqa: BLE001 - Bibliotheksfehler durchreichen
+                raise UpdateFailed(
+                    f"Abruf Bundle {bundle_id} fehlgeschlagen: {err}"
+                ) from err
+
+            if not isinstance(res, dict):
+                raise UpdateFailed(f"Unerwartete Antwort fuer Bundle {bundle_id}")
+            for entry in res.get("Values", []) or []:
+                if "Value" in entry:
+                    by_id[str(entry.get("ValueId"))] = _to_float(entry.get("Value"))
+
+        result: dict[str, Any] = {}
         for value_id, _bundle_id, _name, key in AIR_SENSORS:
             value = by_id.get(str(value_id))
             if value is not None:
                 result[key] = value
         if not result:
             raise UpdateFailed("Keine Werte erhalten")
+        result["_abgerufen"] = dt_util.now().isoformat(timespec="seconds")
+        _LOGGER.debug("Luft-Temperaturen abgerufen: %s", result)
         return result
 
-    coordinator: DataUpdateCoordinator[dict[str, float]] = DataUpdateCoordinator(
+    coordinator: DataUpdateCoordinator[dict[str, Any]] = DataUpdateCoordinator(
         hass,
         _LOGGER,
         # Diese Integration hat keinen Config-Entry (Start ueber async_setup).
@@ -164,7 +224,7 @@ class WolfAirTemperature(CoordinatorEntity, SensorEntity):
 
     def __init__(
         self,
-        coordinator: DataUpdateCoordinator[dict[str, float]],
+        coordinator: DataUpdateCoordinator[dict[str, Any]],
         name: str,
         key: str,
     ) -> None:
@@ -178,6 +238,13 @@ class WolfAirTemperature(CoordinatorEntity, SensorEntity):
         if not self.coordinator.data:
             return None
         return self.coordinator.data.get(self._key)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Zeitpunkt des letzten erfolgreichen Abrufs - zur Fehlersuche."""
+        if not self.coordinator.data:
+            return {}
+        return {"abgerufen": self.coordinator.data.get("_abgerufen")}
 
     @property
     def available(self) -> bool:
