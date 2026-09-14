@@ -26,6 +26,7 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import discovery
 from homeassistant.helpers.typing import ConfigType
 
 from wolf_comm.wolf_client import WolfClient
@@ -304,4 +305,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         DOMAIN, SERVICE_SET_VALUE, async_set_value, schema=SERVICE_SCHEMA
     )
     _LOGGER.debug("Service %s.%s registriert", DOMAIN, SERVICE_SET_VALUE)
+    hass.async_create_task(
+        discovery.async_load_platform(hass, "sensor", DOMAIN, {}, config)
+    )
     return True
