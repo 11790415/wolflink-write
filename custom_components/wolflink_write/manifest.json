@@ -1,7 +1,7 @@
 {
   "domain": "wolflink_write",
   "name": "Wolf SmartSet Write",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "documentation": "https://github.com/home-assistant/core/pull/128988",
   "issue_tracker": "https://github.com/home-assistant/core/pull/128988",
   "codeowners": [],
