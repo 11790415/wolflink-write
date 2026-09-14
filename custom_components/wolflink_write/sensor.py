@@ -14,6 +14,17 @@ offiziellen Integration entwerten koennen.
 
 Der WolfClient der laufenden wolflink-Integration wird wiederverwendet.
 
+Warum zusaetzlich GetGuiDescriptionForGateway: Das Wolf-Gateway liest die
+Register der Fachmann-Ebene offenbar nur dann frisch ueber den eBus ein, wenn
+eine GUI-Sitzung sie angefordert hat. Die gemeinsam genutzte Sitzung der
+offiziellen Integration kennt nur das Benutzermenue, deshalb frieren die Werte
+nach kurzer Zeit ein. Der Aufruf der Geraetebeschreibung ist genau das, was die
+SmartSet-Seite beim Oeffnen tut, und erneuert diese Registrierung.
+
+Er passiert nicht bei jedem Zyklus, sondern nur beim ersten Lauf und immer dann,
+wenn der vorherige Abruf exakt dieselben Werte geliefert hat wie der davor - also
+genau bei Verdacht auf eingefrorene Daten.
+
 Warum nicht client.fetch_value(): Diese Methode sendet Bundle=False. Die Werte
 der Fachmann-Ebene werden vom Gateway dann offenbar nicht frisch ueber den eBus
 geholt, sondern es kommt der zuletzt zwischengespeicherte Stand zurueck - in der
@@ -60,6 +71,7 @@ _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=120)
 
 PARAMETER_VALUES_PATH = "api/portal/GetParameterValues"
+GUI_DESCRIPTION_PATH = "api/portal/GetGuiDescriptionForGateway"
 
 # ValueId, BundleId, Anzeigename, eindeutige Kennung
 # Ermittelt ueber einen einmaligen Lauf mit expert_p=True.
@@ -150,6 +162,22 @@ async def async_setup_platform(
             headers={"Content-Type": "application/json"},
         )
 
+    # Zustand zwischen den Zyklen: erkennt eingefrorene Werte
+    _diag: dict[str, Any] = {"letzte": None, "unveraendert": 0, "gui_refreshes": 0}
+
+    async def _refresh_gui(client, gateway, system) -> None:
+        """Geraetebeschreibung anfordern, wie es die SmartSet-Seite beim Oeffnen tut."""
+        request = getattr(client, "_WolfClient__request", None)
+        if request is None:
+            return
+        await request(
+            "get",
+            GUI_DESCRIPTION_PATH,
+            params={"GatewayId": gateway, "SystemId": system},
+        )
+        _diag["gui_refreshes"] += 1
+        _LOGGER.debug("GUI-Beschreibung erneuert (%s. Mal)", _diag["gui_refreshes"])
+
     async def _async_update() -> dict[str, Any]:
         client, gateway, system = _resolve_client(hass)
         if client is None:
@@ -159,6 +187,15 @@ async def async_setup_platform(
             )
         if getattr(client, "session_id", None) is None:
             raise UpdateFailed("Noch keine Wolf-Sitzung - naechster Versuch spaeter")
+
+        # Beim ersten Lauf und bei Verdacht auf eingefrorene Werte die
+        # GUI-Registrierung erneuern. Fehler dabei sind nicht kritisch - der
+        # eigentliche Werteabruf wird trotzdem versucht.
+        if _diag["letzte"] is None or _diag["unveraendert"] >= 1:
+            try:
+                await _refresh_gui(client, gateway, system)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("GUI-Erneuerung fehlgeschlagen: %s", err)
 
         by_id: dict[str, float | None] = {}
         for bundle_id, value_ids in bundles.items():
@@ -184,7 +221,20 @@ async def async_setup_platform(
                 result[key] = value
         if not result:
             raise UpdateFailed("Keine Werte erhalten")
+
+        if _diag["letzte"] == result:
+            _diag["unveraendert"] += 1
+            _LOGGER.debug(
+                "Werte seit %s Zyklen unveraendert - GUI wird erneuert",
+                _diag["unveraendert"],
+            )
+        else:
+            _diag["unveraendert"] = 0
+        _diag["letzte"] = dict(result)
+
         result["_abgerufen"] = dt_util.now().isoformat(timespec="seconds")
+        result["_unveraendert"] = _diag["unveraendert"]
+        result["_gui_refreshes"] = _diag["gui_refreshes"]
         _LOGGER.debug("Luft-Temperaturen abgerufen: %s", result)
         return result
 
@@ -244,7 +294,11 @@ class WolfAirTemperature(CoordinatorEntity, SensorEntity):
         """Zeitpunkt des letzten erfolgreichen Abrufs - zur Fehlersuche."""
         if not self.coordinator.data:
             return {}
-        return {"abgerufen": self.coordinator.data.get("_abgerufen")}
+        return {
+            "abgerufen": self.coordinator.data.get("_abgerufen"),
+            "zyklen_unveraendert": self.coordinator.data.get("_unveraendert"),
+            "gui_erneuerungen": self.coordinator.data.get("_gui_refreshes"),
+        }
 
     @property
     def available(self) -> bool:
